@@ -1,0 +1,8 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+out/
+out-*/
+devhub-swagger.json
