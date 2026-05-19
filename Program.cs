@@ -29,7 +29,7 @@ internal static class App
         {
             var typeMapper = new Vb6TypeMapper();
             var (dtos, enums) = BuildSchemaModels(doc, typeMapper, opts.SchemaFilter);
-            var controllers = BuildControllerModels(doc, typeMapper, opts.TagFilter);
+            var controllers = BuildControllerModels(doc, typeMapper, opts.TagFilter, opts.ProjectName);
 
             EmitAll(opts, dtos, enums, controllers);
 
@@ -181,10 +181,13 @@ internal static class App
         return dto;
     }
 
-    private static List<ControllerModel> BuildControllerModels(OpenApiDocument doc, Vb6TypeMapper mapper, Regex? filter)
+    private static List<ControllerModel> BuildControllerModels(OpenApiDocument doc, Vb6TypeMapper mapper, Regex? filter, string projectName)
     {
         var byTag = new Dictionary<string, ControllerModel>(StringComparer.OrdinalIgnoreCase);
         if (doc.Paths is null) return new List<ControllerModel>();
+
+        var maxClassLen = Math.Max(8, 39 - projectName.Length - 1);
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (path, item) in doc.Paths)
         {
@@ -194,12 +197,14 @@ internal static class App
                 if (filter is not null && !filter.IsMatch(tag)) continue;
                 if (!byTag.TryGetValue(tag, out var c))
                 {
-                    var cls = Vb6Naming.PascalCase(tag) + "Api";
+                    var full = "c" + Vb6Naming.PascalCase(tag) + "Api";
+                    var cls = TruncateUnique(full, maxClassLen, used);
+                    used.Add(cls);
                     c = new ControllerModel
                     {
                         Tag = tag,
-                        ClassName = "c" + cls,
-                        PropertyName = Vb6Naming.PascalCase(tag)
+                        ClassName = cls,
+                        PropertyName = Vb6Naming.SafeIdentifier(tag)
                     };
                     byTag[tag] = c;
                 }
@@ -207,6 +212,20 @@ internal static class App
             }
         }
         return byTag.Values.OrderBy(c => c.ClassName).ToList();
+    }
+
+    private static string TruncateUnique(string name, int maxLen, HashSet<string> used)
+    {
+        if (name.Length <= maxLen && !used.Contains(name)) return name;
+        var baseName = name.Length <= maxLen ? name : name[..maxLen];
+        if (!used.Contains(baseName)) return baseName;
+        for (int n = 2; n < 1000; n++)
+        {
+            var suffix = n.ToString();
+            var candidate = baseName[..Math.Min(baseName.Length, maxLen - suffix.Length)] + suffix;
+            if (!used.Contains(candidate)) return candidate;
+        }
+        return baseName;
     }
 
     private static OperationModel BuildOperation(string method, string path, OpenApiOperation op, Vb6TypeMapper mapper)
@@ -279,6 +298,7 @@ internal static class App
         var dtoEmitter = new DtoEmitter();
         var controllerEmitter = new ControllerEmitter();
         var facadeEmitter = new FacadeEmitter();
+        var enumEmitter = new EnumEmitter();
         var helperEmitter = new HelperEmitter();
         var vbpEmitter = new VbpEmitter();
 
@@ -301,8 +321,15 @@ internal static class App
         File.WriteAllText(facadePath, facadeEmitter.Emit(controllers));
         classFiles.Add(facadePath);
 
+        if (enums.Count > 0)
+        {
+            var enumPath = Path.Combine(opts.Output, "cEnums.cls");
+            File.WriteAllText(enumPath, enumEmitter.Emit(enums));
+            classFiles.Add(enumPath);
+        }
+
         var helperPath = Path.Combine(opts.Output, "modGenApi.bas");
-        File.WriteAllText(helperPath, helperEmitter.Emit(dtos, enums));
+        File.WriteAllText(helperPath, helperEmitter.Emit(dtos));
         moduleFiles.Add(helperPath);
 
         var inputs = new VbpEmitterInputs

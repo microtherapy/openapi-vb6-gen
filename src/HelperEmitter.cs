@@ -4,7 +4,7 @@ namespace OpenApiVb6Gen;
 
 internal sealed class HelperEmitter
 {
-    public string Emit(IEnumerable<DtoModel> dtos, IEnumerable<EnumModel> enums)
+    public string Emit(IEnumerable<DtoModel> dtos)
     {
         var w = new Vb6Writer();
         w.Line("Attribute VB_Name = \"modGenApi\"");
@@ -15,8 +15,6 @@ internal sealed class HelperEmitter
         w.Line();
 
         WriteConstants(w);
-        w.Line();
-        WriteEnums(w, enums);
         w.Line();
         WriteUrlHelpers(w);
         w.Line();
@@ -40,24 +38,6 @@ internal sealed class HelperEmitter
     {
         w.Line("Private Const gcContentType As String = \"application/json\"");
         w.Line("Private Const gcCharSet As String = \"utf-8\"");
-    }
-
-    private static void WriteEnums(Vb6Writer w, IEnumerable<EnumModel> enums)
-    {
-        foreach (var e in enums)
-        {
-            w.Comment($"Enum: {e.EnumName}");
-            w.Line($"Public Enum {e.EnumName}");
-            w.Indent();
-            if (e.Members.Count == 0)
-                w.Line($"{e.EnumName}_None = 0");
-            else
-                foreach (var m in e.Members)
-                    w.Line($"{e.EnumName}_{m.VbName} = {m.IntValue}");
-            w.Outdent();
-            w.Line("End Enum");
-            w.Line();
-        }
     }
 
     private static void WriteUrlHelpers(Vb6Writer w)
@@ -244,6 +224,25 @@ internal sealed class HelperEmitter
         w.Line("End Function");
         w.Line();
 
+        w.Line("Public Function PutJson(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject) As ChilkatJsonObject");
+        w.Indent();
+        w.Line("Dim s As String: s = PutJsonReturnString(api, url, body)");
+        w.Line("Set PutJson = New ChilkatJsonObject");
+        w.Line("If Len(s) > 0 Then PutJson.Load s");
+        w.Outdent();
+        w.Line("End Function");
+        w.Line();
+
+        w.Line("Public Function PutJsonReturnLong(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject) As Long");
+        w.Indent().Line("PutJsonReturnLong = CLng(Val(PutJsonReturnString(api, url, body)))").Outdent();
+        w.Line("End Function");
+        w.Line();
+
+        w.Line("Public Function PutJsonReturnObject(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject) As ChilkatJsonObject");
+        w.Indent().Line("Set PutJsonReturnObject = PutJson(api, url, body)").Outdent();
+        w.Line("End Function");
+        w.Line();
+
         w.Line("Public Sub PutJsonVoid(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject)");
         w.Indent().Line("Dim s As String: s = PutJsonReturnString(api, url, body)").Outdent();
         w.Line("End Sub");
@@ -330,6 +329,32 @@ internal sealed class HelperEmitter
             w.Line("End Function");
             w.Line();
 
+            w.Line($"Public Function PutJsonAs_{cls}(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject) As {cls}");
+            w.Indent();
+            w.Line("Dim obj As ChilkatJsonObject: Set obj = PutJson(api, url, body)");
+            w.Line($"Set PutJsonAs_{cls} = New {cls}");
+            w.Line($"PutJsonAs_{cls}.FromJson obj");
+            w.Outdent();
+            w.Line("End Function");
+            w.Line();
+
+            w.Line($"Public Function PutJsonArrayAs_{cls}(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject) As Collection");
+            w.Indent();
+            w.Line("Dim s As String: s = PutJsonReturnString(api, url, body)");
+            w.Line("Dim arr As New ChilkatJsonArray: If Len(s) > 0 Then arr.Load s");
+            w.Line($"Set PutJsonArrayAs_{cls} = New Collection");
+            w.Line("Dim i As Long, n As Long: n = arr.Size");
+            w.Line("For i = 0 To n - 1");
+            w.Indent();
+            w.Line($"Dim item As {cls}: Set item = New {cls}");
+            w.Line("item.FromJson arr.ObjectAt(i)");
+            w.Line($"PutJsonArrayAs_{cls}.Add item");
+            w.Outdent();
+            w.Line("Next i");
+            w.Outdent();
+            w.Line("End Function");
+            w.Line();
+
             w.Line($"Public Function LoadDto_{cls}(ByVal parent As ChilkatJsonObject, ByVal propName As String) As {cls}");
             w.Indent();
             w.Line("If parent Is Nothing Then Exit Function");
@@ -346,7 +371,10 @@ internal sealed class HelperEmitter
             w.Indent();
             w.Line("If parent Is Nothing Then Exit Sub");
             w.Line("If dto Is Nothing Then parent.UpdateNull propName: Exit Sub");
-            w.Line("parent.AppendObject propName, dto.ToJson()");
+            w.Line("parent.AddObjectAt -1, propName");
+            w.Line("Dim child As ChilkatJsonObject");
+            w.Line("Set child = parent.ObjectOf(propName)");
+            w.Line("child.Load dto.ToJson().Emit()");
             w.Outdent();
             w.Line("End Sub");
             w.Line();
@@ -372,19 +400,19 @@ internal sealed class HelperEmitter
             w.Line($"Public Sub AppendList_{cls}(ByVal parent As ChilkatJsonObject, ByVal propName As String, ByVal items As Collection)");
             w.Indent();
             w.Line("If parent Is Nothing Then Exit Sub");
-            w.Line("Dim arr As New ChilkatJsonArray");
-            w.Line("If Not items Is Nothing Then");
-            w.Indent();
+            w.Line("parent.AddArrayAt -1, propName");
+            w.Line("If items Is Nothing Then Exit Sub");
+            w.Line("Dim arr As ChilkatJsonArray");
+            w.Line("Set arr = parent.ArrayOf(propName)");
             w.Line($"Dim item As {cls}");
+            w.Line("Dim child As ChilkatJsonObject");
             w.Line("For Each item In items");
             w.Indent();
-            w.Line("Dim child As ChilkatJsonObject: Set child = item.ToJson()");
-            w.Line("arr.AddObjectAt -1, child.Emit()");
+            w.Line("arr.AddObjectAt -1");
+            w.Line("Set child = arr.ObjectAt(arr.Size - 1)");
+            w.Line("child.Load item.ToJson().Emit()");
             w.Outdent();
             w.Line("Next item");
-            w.Outdent();
-            w.Line("End If");
-            w.Line("parent.AddArrayCopyAt propName, -1, arr");
             w.Outdent();
             w.Line("End Sub");
             w.Line();
@@ -413,7 +441,22 @@ internal sealed class HelperEmitter
         w.Line("Dim i As Long, n As Long: n = arr.Size");
         w.Line("For i = 0 To n - 1");
         w.Indent();
-        w.Line($"LoadList_{suffix}.Add arr.{ReaderForPrimitive(suffix)}");
+        w.Line($"LoadList_{suffix}.Add {ReaderForPrimitive(suffix)}");
+        w.Outdent();
+        w.Line("Next i");
+        w.Outdent();
+        w.Line("End Function");
+        w.Line();
+
+        w.Line($"Public Function GetJsonArrayAs_{suffix}(ByVal api As cApi, ByVal url As String) As Collection");
+        w.Indent();
+        w.Line("Dim arr As ChilkatJsonArray: Set arr = GetJsonArray(api, url)");
+        w.Line($"Set GetJsonArrayAs_{suffix} = New Collection");
+        w.Line("If arr Is Nothing Then Exit Function");
+        w.Line("Dim i As Long, n As Long: n = arr.Size");
+        w.Line("For i = 0 To n - 1");
+        w.Indent();
+        w.Line($"GetJsonArrayAs_{suffix}.Add {ReaderForPrimitive(suffix)}");
         w.Outdent();
         w.Line("Next i");
         w.Outdent();
@@ -423,9 +466,10 @@ internal sealed class HelperEmitter
         w.Line($"Public Sub AppendList_{suffix}(ByVal parent As ChilkatJsonObject, ByVal propName As String, ByVal items As Collection)");
         w.Indent();
         w.Line("If parent Is Nothing Then Exit Sub");
-        w.Line("Dim arr As New ChilkatJsonArray");
-        w.Line("If Not items Is Nothing Then");
-        w.Indent();
+        w.Line("parent.AddArrayAt -1, propName");
+        w.Line("If items Is Nothing Then Exit Sub");
+        w.Line("Dim arr As ChilkatJsonArray");
+        w.Line("Set arr = parent.ArrayOf(propName)");
         w.Line($"Dim v As {itemDecl}");
         w.Line("For Each v In items");
         w.Indent();
@@ -433,22 +477,19 @@ internal sealed class HelperEmitter
         w.Outdent();
         w.Line("Next v");
         w.Outdent();
-        w.Line("End If");
-        w.Line("parent.AddArrayCopyAt propName, -1, arr");
-        w.Outdent();
         w.Line("End Sub");
         w.Line();
     }
 
     private static string ReaderForPrimitive(string suffix) => suffix switch
     {
-        "String" => "StringAt(i)",
-        "Long" => "IntAt(i)",
-        "Currency" => "IntAt(i)",
-        "Double" => "NumberAt(i)",
-        "Boolean" => "BoolAt(i)",
-        "Date" => "StringAt(i)",
-        _ => "StringAt(i)"
+        "String" => "arr.StringAt(i)",
+        "Long" => "arr.IntAt(i)",
+        "Currency" => "arr.IntAt(i)",
+        "Double" => "CDbl(Val(arr.StringAt(i)))",
+        "Boolean" => "arr.BoolAt(i)",
+        "Date" => "arr.StringAt(i)",
+        _ => "arr.StringAt(i)"
     };
 
     private static string AppendForPrimitive(string suffix) => suffix switch

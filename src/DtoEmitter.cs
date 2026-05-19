@@ -97,7 +97,7 @@ internal sealed class DtoEmitter
                 w.Line($"m{p.VbName} = CCur(obj.IntOf({jn}))");
                 break;
             case Vb6Kind.Double:
-                w.Line($"m{p.VbName} = obj.NumberOf({jn})");
+                w.Line($"m{p.VbName} = CDbl(Val(obj.StringOf({jn})))");
                 break;
             case Vb6Kind.Boolean:
                 w.Line($"m{p.VbName} = obj.BoolOf({jn})");
@@ -194,7 +194,12 @@ internal sealed class DtoEmitter
                 EmitCollectionSave(w, p, jn);
                 break;
             case Vb6Kind.ChilkatJsonObject:
-                w.Line($"If Not m{p.VbName} Is Nothing Then ToJson.AppendObject {jn}, m{p.VbName}");
+                w.Line($"If Not m{p.VbName} Is Nothing Then");
+                w.Indent();
+                w.Line($"ToJson.AddObjectAt -1, {jn}");
+                w.Line($"ToJson.ObjectOf({jn}).Load m{p.VbName}.Emit()");
+                w.Outdent();
+                w.Line("End If");
                 break;
         }
     }

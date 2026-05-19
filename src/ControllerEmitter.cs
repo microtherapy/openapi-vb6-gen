@@ -250,13 +250,27 @@ internal sealed class ControllerEmitter
     {
         var bodyArg = op.Body is null ? "Nothing" : BodyArg(op.Body);
         if (resp is null) { w.Line($"modGenApi.PutJsonVoid mApi, url, {bodyArg}"); return; }
-        w.Line($"{ResponseAssignPrefix(resp)}{op.VbMethodName} = modGenApi.PutJsonReturnString(mApi, url, {bodyArg})");
+        w.Line($"{ResponseAssignPrefix(resp)}{op.VbMethodName} = {PutCall(resp, bodyArg)}");
     }
+
+    private static string PutCall(Vb6Type resp, string bodyArg) => resp.Kind switch
+    {
+        Vb6Kind.DtoRef => $"modGenApi.PutJsonAs_{resp.DtoClassName}(mApi, url, {bodyArg})",
+        Vb6Kind.Collection when resp.ItemType!.IsDtoRef =>
+            $"modGenApi.PutJsonArrayAs_{resp.ItemType.DtoClassName}(mApi, url, {bodyArg})",
+        Vb6Kind.String => $"modGenApi.PutJsonReturnString(mApi, url, {bodyArg})",
+        Vb6Kind.Long or Vb6Kind.Enum => $"modGenApi.PutJsonReturnLong(mApi, url, {bodyArg})",
+        Vb6Kind.ChilkatJsonObject => $"modGenApi.PutJsonReturnObject(mApi, url, {bodyArg})",
+        _ => $"modGenApi.PutJsonReturnString(mApi, url, {bodyArg})"
+    };
 
     private static void EmitDelete(Vb6Writer w, OperationModel op, Vb6Type? resp, bool isFunction)
     {
         if (resp is null) { w.Line("modGenApi.DeleteResource mApi, url"); return; }
-        w.Line($"{ResponseAssignPrefix(resp)}{op.VbMethodName} = modGenApi.DeleteReturnString(mApi, url)");
+        if (resp.Kind is Vb6Kind.String or Vb6Kind.Long or Vb6Kind.Enum or Vb6Kind.Currency or Vb6Kind.Double or Vb6Kind.Boolean or Vb6Kind.Date)
+            w.Line($"{op.VbMethodName} = modGenApi.DeleteReturnString(mApi, url)");
+        else
+            w.Line($"' DELETE with typed response body ({resp.Declaration}) not supported by generated helpers");
     }
 
     private static void EmitPatch(Vb6Writer w, OperationModel op, Vb6Type? resp, bool isFunction)
@@ -264,7 +278,7 @@ internal sealed class ControllerEmitter
         var bodyArg = op.Body is null ? "Nothing" : BodyArg(op.Body);
         w.Comment("PATCH support is minimal; treated like PUT.");
         if (resp is null) { w.Line($"modGenApi.PutJsonVoid mApi, url, {bodyArg}"); return; }
-        w.Line($"{ResponseAssignPrefix(resp)}{op.VbMethodName} = modGenApi.PutJsonReturnString(mApi, url, {bodyArg})");
+        w.Line($"{ResponseAssignPrefix(resp)}{op.VbMethodName} = {PutCall(resp, bodyArg)}");
     }
 
     private static string BodyArg(ParameterModel body) => body.Type.Kind switch
