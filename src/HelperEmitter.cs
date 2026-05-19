@@ -544,16 +544,6 @@ internal sealed class HelperEmitter
         w.Outdent();
         w.Line("End Function");
         w.Line();
-
-        w.Line("Public Sub SaveBytesToFile(ByVal data As Variant, ByVal path As String)");
-        w.Indent();
-        w.Line("Dim b() As Byte: b = data");
-        w.Line("Dim fnum As Integer: fnum = FreeFile");
-        w.Line("Open path For Binary Access Write As #fnum");
-        w.Line("Put #fnum, , b");
-        w.Line("Close #fnum");
-        w.Outdent();
-        w.Line("End Sub");
     }
 
     private static void WriteDateHelpers(Vb6Writer w)

@@ -20,9 +20,14 @@ internal static class App
             return 1;
         }
 
+        var compatDllPath = Path.Combine(opts.Output, opts.ProjectName + ".compat.dll");
         if (opts.Clean && Directory.Exists(opts.Output))
+        {
+            var preserveName = Path.GetFileName(compatDllPath);
             foreach (var f in Directory.EnumerateFiles(opts.Output))
-                File.Delete(f);
+                if (!string.Equals(Path.GetFileName(f), preserveName, StringComparison.OrdinalIgnoreCase))
+                    File.Delete(f);
+        }
         Directory.CreateDirectory(opts.Output);
 
         try
@@ -36,7 +41,7 @@ internal static class App
             var (dtos, enums) = BuildSchemaModels(doc, typeMapper, opts.SchemaFilter);
             var controllers = BuildControllerModels(doc, typeMapper, opts.TagFilter, opts.ProjectName);
 
-            EmitAll(opts, dtos, enums, controllers);
+            EmitAll(opts, dtos, enums, controllers, compatDllPath);
 
             Console.WriteLine($"Generated {dtos.Count} DTO classes, {enums.Count} enums, {controllers.Count} controllers");
             Console.WriteLine($"Output: {opts.Output}");
@@ -52,8 +57,8 @@ internal static class App
     private static Options? ParseArgs(string[] args)
     {
         string? input = null, output = null, projectName = "OpenApiClient", mainVbp = null;
-        string? tagFilter = null, schemaFilter = null;
-        bool clean = false;
+        string? tagFilter = null, schemaFilter = null, vb6Exe = null;
+        bool clean = false, noSeed = false;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -66,6 +71,8 @@ internal static class App
                 case "--tag-filter": tagFilter = args[++i]; break;
                 case "--schema-filter": schemaFilter = args[++i]; break;
                 case "--clean": clean = true; break;
+                case "--vb6-exe": vb6Exe = args[++i]; break;
+                case "--no-seed": noSeed = true; break;
                 case "-h" or "--help": PrintHelp(); return null;
                 default:
                     Console.Error.WriteLine($"Unknown argument: {args[i]}");
@@ -89,7 +96,9 @@ internal static class App
             MainVbp = mainVbp,
             TagFilter = string.IsNullOrWhiteSpace(tagFilter) ? null : new Regex(tagFilter!),
             SchemaFilter = string.IsNullOrWhiteSpace(schemaFilter) ? null : new Regex(schemaFilter!),
-            Clean = clean
+            Clean = clean,
+            Vb6Exe = vb6Exe,
+            NoSeed = noSeed
         };
     }
 
@@ -103,7 +112,9 @@ internal static class App
               --main-vbp <path>         optional: host .vbp to copy Chilkat References from
               --tag-filter <regex>      optional: include only matching tags
               --schema-filter <regex>   optional: include only matching schemas
-              --clean                   wipe output dir first
+              --clean                   wipe output dir (preserves <project>.compat.dll)
+              --vb6-exe <path>          override default VB6.EXE location for the compat-DLL build
+              --no-seed                 skip the VB6 build (CI mode); .vbp falls back to CompatibleMode=0 if no .compat.dll
             """);
     }
 
@@ -312,7 +323,7 @@ internal static class App
         return false;
     }
 
-    private static void EmitAll(Options opts, List<DtoModel> dtos, List<EnumModel> enums, List<ControllerModel> controllers)
+    private static void EmitAll(Options opts, List<DtoModel> dtos, List<EnumModel> enums, List<ControllerModel> controllers, string compatDllPath)
     {
         var dtoEmitter = new DtoEmitter();
         var controllerEmitter = new ControllerEmitter();
@@ -351,19 +362,55 @@ internal static class App
         File.WriteAllText(helperPath, helperEmitter.Emit(dtos));
         moduleFiles.Add(helperPath);
 
-        var inputs = new VbpEmitterInputs
+        var baseInputs = new VbpEmitterInputs
         {
             ProjectName = opts.ProjectName,
             ClassFiles = classFiles,
             ModuleFiles = moduleFiles,
-            MainVbpPath = opts.MainVbp
+            MainVbpPath = opts.MainVbp,
+            CompatibleExePath = null
         };
-        File.WriteAllText(Path.Combine(opts.Output, opts.ProjectName + ".vbp"), vbpEmitter.EmitVbp(inputs));
-        File.WriteAllText(Path.Combine(opts.Output, opts.ProjectName + ".vbw"), vbpEmitter.EmitVbw(inputs));
+        var vbpPath = Path.Combine(opts.Output, opts.ProjectName + ".vbp");
+
+        if (!opts.NoSeed)
+            BuildCompatDll(opts, baseInputs, vbpEmitter, vbpPath, compatDllPath);
+
+        var finalInputs = baseInputs with { CompatibleExePath = File.Exists(compatDllPath) ? compatDllPath : null };
+        File.WriteAllText(vbpPath, vbpEmitter.EmitVbp(finalInputs));
+        File.WriteAllText(Path.Combine(opts.Output, opts.ProjectName + ".vbw"), vbpEmitter.EmitVbw(finalInputs));
 
         var clientVbpRel = opts.ProjectName + ".vbp";
         File.WriteAllText(Path.Combine(opts.Output, opts.ProjectName + ".vbg"),
             vbpEmitter.EmitVbg(opts.ProjectName, opts.MainVbp, clientVbpRel));
+    }
+
+    private static void BuildCompatDll(Options opts, VbpEmitterInputs baseInputs, VbpEmitter vbpEmitter,
+        string vbpPath, string compatDllPath)
+    {
+        var anchorExists = File.Exists(compatDllPath);
+        var buildInputs = baseInputs with { CompatibleExePath = anchorExists ? compatDllPath : null };
+        File.WriteAllText(vbpPath, vbpEmitter.EmitVbp(buildInputs));
+        File.WriteAllText(Path.Combine(opts.Output, opts.ProjectName + ".vbw"), vbpEmitter.EmitVbw(buildInputs));
+
+        var builtDll = Path.Combine(opts.Output, opts.ProjectName + ".dll");
+        if (File.Exists(builtDll)) File.Delete(builtDll);
+        var vb6 = Vb6Bootstrap.FindVb6Exe(opts.Vb6Exe);
+        var buildLog = Path.Combine(opts.Output, "_build.log");
+        var verb = anchorExists ? "Rebuilding compat DLL against existing anchor" : "Seeding compat DLL (no existing anchor)";
+        Console.WriteLine($"{verb}: {vb6} /make {Path.GetFileName(vbpPath)}");
+        var exit = Vb6Bootstrap.RunMake(vb6, vbpPath, buildLog);
+        if (!File.Exists(builtDll))
+        {
+            var log = File.Exists(buildLog) ? File.ReadAllText(buildLog) : "(no log)";
+            throw new InvalidOperationException($"VB6 build failed (exit={exit}):\n{log}");
+        }
+
+        if (File.Exists(compatDllPath)) File.Delete(compatDllPath);
+        File.Move(builtDll, compatDllPath);
+
+        if (File.Exists(buildLog)) File.Delete(buildLog);
+
+        Console.WriteLine($"Wrote compat DLL: {Path.GetFileName(compatDllPath)}");
     }
 
     private sealed class Options
@@ -375,5 +422,7 @@ internal static class App
         public Regex? TagFilter { get; init; }
         public Regex? SchemaFilter { get; init; }
         public bool Clean { get; init; }
+        public string? Vb6Exe { get; init; }
+        public bool NoSeed { get; init; }
     }
 }

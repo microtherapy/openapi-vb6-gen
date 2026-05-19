@@ -2,12 +2,13 @@ using System.Text;
 
 namespace OpenApiVb6Gen;
 
-internal sealed class VbpEmitterInputs
+internal sealed record VbpEmitterInputs
 {
     public required string ProjectName { get; init; }
     public required IReadOnlyList<string> ClassFiles { get; init; }
     public required IReadOnlyList<string> ModuleFiles { get; init; }
     public string? MainVbpPath { get; init; }
+    public string? CompatibleExePath { get; init; }
 }
 
 internal sealed class VbpEmitter
@@ -31,7 +32,15 @@ internal sealed class VbpEmitter
         sb.AppendLine($"Name=\"{i.ProjectName}\"");
         sb.AppendLine("HelpContextID=\"0\"");
         sb.AppendLine($"Description=\"Generated API client for {i.ProjectName}\"");
-        sb.AppendLine("CompatibleMode=\"0\"");
+        if (!string.IsNullOrWhiteSpace(i.CompatibleExePath) && File.Exists(i.CompatibleExePath))
+        {
+            sb.AppendLine("CompatibleMode=\"2\"");
+            sb.AppendLine($"CompatibleEXE32=\"{i.CompatibleExePath}\"");
+        }
+        else
+        {
+            sb.AppendLine("CompatibleMode=\"0\"");
+        }
         sb.AppendLine("MajorVer=1");
         sb.AppendLine("MinorVer=0");
         sb.AppendLine("RevisionVer=0");

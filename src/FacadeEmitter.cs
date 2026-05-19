@@ -35,7 +35,40 @@ internal sealed class FacadeEmitter
             w.Line("End Property");
             w.Line();
         }
+
+        WriteUnlockChilkat(w);
+        w.Line();
+        WriteSaveBytesToFile(w);
         return w.ToString();
+    }
+
+    private static void WriteUnlockChilkat(Vb6Writer w)
+    {
+        w.Comment("Unlocks Chilkat 11 process-wide. Call once at app startup before any API call.");
+        w.Comment("Returns True on success. On failure, the Chilkat global's LastErrorText is in the raised error.");
+        w.Line("Public Function UnlockChilkat(ByVal licenseKey As String) As Boolean");
+        w.Indent();
+        w.Line("Dim g As ChilkatGlobal: Set g = New ChilkatGlobal");
+        w.Line("If g.UnlockBundle(licenseKey) <> 1 Then");
+        w.Indent().Line("Err.Raise vbObjectError + 513, \"cApi.UnlockChilkat\", g.LastErrorText").Outdent();
+        w.Line("End If");
+        w.Line("UnlockChilkat = True");
+        w.Outdent();
+        w.Line("End Function");
+    }
+
+    private static void WriteSaveBytesToFile(Vb6Writer w)
+    {
+        w.Comment("Writes a Variant byte array (as returned by binary endpoints) to disk.");
+        w.Line("Public Sub SaveBytesToFile(ByVal data As Variant, ByVal path As String)");
+        w.Indent();
+        w.Line("Dim b() As Byte: b = data");
+        w.Line("Dim fnum As Integer: fnum = FreeFile");
+        w.Line("Open path For Binary Access Write As #fnum");
+        w.Line("Put #fnum, , b");
+        w.Line("Close #fnum");
+        w.Outdent();
+        w.Line("End Sub");
     }
 
     private static void WriteClsHeader(Vb6Writer w, string className)

@@ -44,32 +44,39 @@ dotnet run --project OpenApiVb6Gen.csproj -- `
 | `--main-vbp` | no | Host `.vbp` to copy Chilkat `Reference=` / `Object=` lines from |
 | `--tag-filter` | no | Regex; only matching tags emitted |
 | `--schema-filter` | no | Regex; only matching schemas emitted |
-| `--clean` | no | Wipe output dir before emitting |
+| `--clean` | no | Wipe output dir before emitting (preserves `<project>.compat.dll`) |
+| `--vb6-exe` | no | Override VB6.EXE path used for the seed bootstrap (default: `C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE`) |
+| `--no-seed` | no | Skip the seed bootstrap (use when VB6 isn't installed, e.g. CI). Generated `.vbp` falls back to `CompatibleMode=0` |
 
 ## Generated layout
 
 ```
 {output}/
-  {ProjectName}.vbp     ActiveX DLL project
-  {ProjectName}.vbw     workspace state
-  {ProjectName}.vbg     project group (host + DLL) for IDE step-through
-  cApi.cls              facade — only class host New's directly
-  c{Schema}.cls         one per OpenAPI schema (typed DTO)
-  c{Tag}Api.cls         one per OpenAPI tag (operations)
-  modGenApi.bas         internal helpers + Public Enum types
+  {ProjectName}.vbp         ActiveX DLL project
+  {ProjectName}.vbw         workspace state
+  {ProjectName}.vbg         project group (host + DLL) for IDE step-through
+  {ProjectName}.compat.dll  cached compat DLL — VB6 binary-compatibility target (commit to source control)
+  cApi.cls                  facade — only class host New's directly
+  cEnums.cls                public enums (ActiveX-exposed)
+  c{Schema}.cls             one per OpenAPI schema (typed DTO)
+  c{Tag}Api.cls             one per OpenAPI tag (operations)
+  modGenApi.bas             internal helpers (not part of the ActiveX surface)
 ```
 
 ## One-time host setup
 
-1. Open `{output}\{ProjectName}.vbp` in VB6 IDE.
-2. If the Chilkat reference wasn't copied from `--main-vbp`: Project → References → Chilkat ActiveX.
-3. File → Make `{ProjectName}.dll`.
-4. In your host `.vbp`: Project → References → Browse → select the compiled DLL. Save.
+1. Run the generator. It invokes VB6 to build the client DLL, then renames the output to `<project>.compat.dll`. The first run starts from scratch (CompatibleMode=0); every subsequent run anchors against the existing compat DLL so CLSIDs for existing types are preserved, and **new types added between runs are captured in the refreshed compat DLL** — no risk of a type silently getting a fresh CLSID on every build because the anchor was stale.
+2. In your host `.vbp`: Project → References → Browse → select `<project>.compat.dll`. Save.
+
+**Commit `<project>.compat.dll` to source control** alongside the generated `.cls` files. It is the on-disk identity of the COM contract; lose it and CLSIDs reshuffle, breaking host references.
+
+If VB6 isn't on the box (e.g. CI codegen, Docker), pass `--no-seed` to skip the VB6 build. The generated `.vbp` then emits `CompatibleMode=0` (if no compat DLL exists) or `CompatibleMode=2` referencing the existing one — but no fresh DLL is produced; the user has to open VB6 to build it.
 
 ## Host usage
 
 ```vb
 Dim api As New OpenApiClient.cApi
+api.UnlockChilkat "MY-CHILKAT-LICENSE-KEY"   ' once at startup
 api.Init "https://my-api.example.com/", myBearerToken
 
 ' Single object
@@ -88,12 +95,11 @@ Next
 
 ## Regeneration workflow
 
-1. Re-run `dotnet run …` with the same arguments.
-2. Open `{ProjectName}.vbp` in VB6 IDE, File → Make DLL. If signatures changed, click through the binary-compat dialog.
-3. If signatures changed: in host VB6, Project → References → uncheck `{ProjectName}` → recheck. Save.
-4. The host `.vbp` is never edited by hand.
+1. Re-run `dotnet run …` with the same arguments. The generator emits source, invokes VB6 `/make` anchored against the existing `<project>.compat.dll`, and replaces the compat DLL with the freshly built one. Existing types' CLSIDs are preserved; new types' CLSIDs are minted once and locked in by the refresh.
+2. The host `.vbp` is **not** edited. As long as `<project>.compat.dll` is present and committed, the host reference stays valid.
+3. If a method signature changed incompatibly, VB6's binary-compatibility logic warns and the build may fail with a vtable-mismatch error in `_build.log`. Resolve by reverting the breaking change, or — for an intentional break — delete `<project>.compat.dll` and re-run (fresh CLSIDs, host must be re-referenced).
 
-Open `{ProjectName}.vbg` instead of either `.vbp` to load host + client together for step-through debugging.
+Open `{ProjectName}.vbg` instead of `.vbp` to load host + client together for step-through debugging in the IDE.
 
 ## Type mapping
 
@@ -106,7 +112,7 @@ Open `{ProjectName}.vbg` instead of either `.vbp` to load host + client together
 | `number` | `Double` |
 | `boolean` | `Boolean` |
 | `nullable` primitive | `Variant` (Empty = null) |
-| enum | `Public Enum e{Name}` in `modGenApi.bas` |
+| enum | `Public Enum e{Name}` in `cEnums.cls` |
 | `$ref` to object | `c{Schema}` typed class |
 | array of `$ref` | `Collection` of `c{Schema}` |
 | array of primitive | `Collection` of native type |

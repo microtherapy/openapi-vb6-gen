@@ -12,7 +12,7 @@ A .NET 8 console tool that reads an OpenAPI 3 spec and emits a VB6 ActiveX DLL s
 
 ```powershell
 dotnet build OpenApiVb6Gen.csproj
-dotnet run --project OpenApiVb6Gen.csproj -- --input <swagger.json|url> --output <dir> [--main-vbp <host.vbp>] [--clean] [--tag-filter <regex>] [--schema-filter <regex>] [--project-name <name>]
+dotnet run --project OpenApiVb6Gen.csproj -- --input <swagger.json|url> --output <dir> [--main-vbp <host.vbp>] [--clean] [--tag-filter <regex>] [--schema-filter <regex>] [--project-name <name>] [--vb6-exe <path>] [--no-seed]
 ```
 
 `TreatWarningsAsErrors=true` and `Nullable=enable` are set — any new C# warning fails the build. There is **no test project**.
@@ -44,10 +44,10 @@ Two-stage pipeline. Parse → model → emit. The boundary is deliberate: emitte
 3. **Emit** one file per concern, all going through `Vb6Writer` (CRLF line endings, indent stack):
    - `DtoEmitter` — one `.cls` per schema, with `FromJson` / `ToJson`
    - `ControllerEmitter` — one `c{Tag}Api.cls` per OpenAPI tag
-   - `FacadeEmitter` — single `cApi.cls` that host code instantiates; holds `BaseURL` / `BearerToken` and lazy-inits controllers
+   - `FacadeEmitter` — single `cApi.cls` that host code instantiates; holds `BaseURL` / `BearerToken`, lazy-inits controllers, and exposes the ActiveX-visible utilities `UnlockChilkat(licenseKey)` and `SaveBytesToFile(data, path)`. These are on `cApi` (not `modGenApi.bas`) precisely because `.bas` symbols are not reachable across the ActiveX boundary.
    - `EnumEmitter` — single `cEnums.cls` holding every `Public Enum`. **Must be a `.cls`, not the `.bas`** — see "ActiveX export rules" below.
    - `HelperEmitter` — `modGenApi.bas`: HTTP core, JSON scalar getters, ISO date helpers, per-DTO `GetJsonAs_/GetJsonArrayAs_/PostJsonAs_/PostJsonArrayAs_/PutJsonAs_/PutJsonArrayAs_/LoadDto_/LoadList_/AppendDto_/AppendList_`, and primitive variants of `LoadList_/GetJsonArrayAs_/AppendList_`.
-   - `VbpEmitter` — emits `.vbp`, `.vbw`, `.vbg`. Reads the host `.vbp` (if `--main-vbp` given) and copies any `Reference=` / `Object=` lines mentioning `Chilkat` into the generated `.vbp`. Without `--main-vbp` a TODO comment is left and the user must add the Chilkat reference in the IDE.
+   - `VbpEmitter` — emits `.vbp`, `.vbw`, `.vbg`. Reads the host `.vbp` (if `--main-vbp` given) and copies any `Reference=` / `Object=` lines mentioning `Chilkat` into the generated `.vbp`. Without `--main-vbp` a TODO comment is left and the user must add the Chilkat reference in the IDE. If `CompatibleExePath` is set on `VbpEmitterInputs` and the file exists, emits `CompatibleMode=2` + `CompatibleEXE32=<path>`; otherwise `CompatibleMode=0`.
 
 To add a new output file kind: write a new emitter and wire it from `App.EmitAll`. To change the C# → VB6 type mapping for *all* outputs: edit `Vb6TypeMapper.Map`.
 
@@ -148,8 +148,33 @@ When changing emitter output, regenerate against a real spec and:
 3. If the change touches `Vb6Type` shape or `Vb6Kind` cases, grep all emitters — `DtoEmitter`, `ControllerEmitter`, `FacadeEmitter`, `EnumEmitter`, `HelperEmitter`, `VbpEmitter` — for switch/branch on `Kind` to ensure the new case is handled.
 4. If you add a new Chilkat method call, confirm it exists in the Chilkat 11 ActiveX reference docs at <https://www.chilkatsoft.com/refdoc/>.
 
+## Binary-compatibility seeding
+
+VB6 mints fresh CLSIDs on every `/make` unless the project file declares a `CompatibleEXE32=<path>` to compare against. Without that, every regen breaks the host's references. The generator anchors against `<project>.compat.dll` and **rebuilds it on every run**, so newly-added types get their CLSIDs captured immediately rather than drifting on each rebuild.
+
+Flow (`Program.BuildCompatDll`, invoked from `EmitAll` unless `--no-seed`):
+
+1. Write `.vbp` / `.vbw` with `CompatibleEXE32=<...compat.dll>` if one already exists, else `CompatibleMode=0` for the very first run.
+2. Invoke VB6 via `Vb6Bootstrap.RunMake` — `VB6.EXE /make <project>.vbp /out _build.log`, 5-minute timeout, kill on hang.
+3. If `<project>.dll` doesn't exist after the run, surface the build log and abort. Pre-existing `<project>.compat.dll` is left untouched.
+4. Replace `<project>.compat.dll` with the freshly built `<project>.dll` — this snapshots the current type set so the *next* regen anchors against types added in *this* regen.
+5. `EmitAll` re-emits `.vbp` / `.vbw` with `CompatibleEXE32=<...compat.dll>` (now guaranteed to exist) so the IDE workflow uses the same anchor.
+
+The .vbp's `ExeName32` is `<project>.dll` while `CompatibleEXE32` is `<project>.compat.dll`. These are deliberately different files: VB6 can build `<project>.dll` without overwriting the anchor it's reading from, and the generator does the swap after the build succeeds.
+
+Why rebuild every time, not just on first run? Without the refresh, types added between regens get a fresh CLSID on every subsequent build (the stale compat DLL doesn't list them, so VB6 has nothing to preserve). The refresh locks new CLSIDs in on the regen that introduces them, so they're stable from that point forward.
+
+Contracts:
+
+- **`<project>.compat.dll` must be source-controlled** by the user. It *is* the on-disk identity of the COM contract — there is no separate metadata file. Lose the DLL and CLSIDs reshuffle on the next build.
+- **`--clean` preserves it** (`Program.cs` filename allowlist) — wiping the rest of the output dir is safe.
+- **`--no-seed`** skips the VB6 build entirely. Use in CI without VB6 installed. The `.vbp` is still emitted with `CompatibleEXE32` pointing at the existing compat DLL (if any), but no fresh DLL is produced.
+- **Deleting `.compat.dll`** forces the next run to seed from scratch with fresh CLSIDs. Host needs to be re-referenced.
+
+There used to be a `TlbPatcher` / `GuidStore` step that rewrote the seed DLL's CLSIDs to deterministic values cached in a `.gen.json` file. It was removed: once the binary is committed to source control, the JSON adds no information not already encoded in the DLL, and the patching path doesn't capture CLSIDs that VB6 mints incrementally between seeds (for new types added later). The simpler "VB6 picks, we commit, regen refreshes" model is what's left.
+
 ## Deployment notes
 
 The generated DLL targets **Chilkat 11.x ActiveX** (typelib `{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}`). Consumers must have it registered (`regsvr32 ChilkatAx-win32.dll`) or declared in a side-by-side manifest.
 
-For production reg-free COM (host `.exe` + `.exe.manifest`), the generated DLL's typelib entries must be added to the host manifest as a `<file name="…\GeneratedClient.dll"><typelib …/><comClass …/>…</file>` block. The CLSIDs and TLBID can be read from the registry after `regsvr32` (under `HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\…` on 64-bit Windows for the 32-bit DLL). If the DLL is rebuilt without VB6's binary-compatibility mode, the CLSIDs change and the manifest block needs to be regenerated.
+For production reg-free COM (host `.exe` + `.exe.manifest`), the generated DLL's typelib entries must be added to the host manifest as a `<file name="…\GeneratedClient.dll"><typelib …/><comClass …/>…</file>` block. The CLSIDs and TLBID can be read from the registry after `regsvr32` (under `HKLM\SOFTWARE\WOW6432Node\Classes\CLSID\…` on 64-bit Windows for the 32-bit DLL), or extracted directly from `<project>.compat.dll`'s typelib resource. With binary-compat seeding active and the compat DLL committed, those CLSIDs **do not change across regens** — the manifest is authored once and survives every codegen. If `<project>.compat.dll` is deleted (or the user runs with `--no-seed`), CLSIDs become volatile again and the manifest must be regenerated whenever the DLL is rebuilt.
