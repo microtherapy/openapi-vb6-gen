@@ -39,7 +39,10 @@ internal static class App
 
             var typeMapper = new Vb6TypeMapper();
             var (dtos, enums) = BuildSchemaModels(doc, typeMapper, opts.SchemaFilter);
-            var controllers = BuildControllerModels(doc, typeMapper, opts.TagFilter, opts.ProjectName);
+            var controllers = BuildControllerModels(doc, typeMapper, opts.TagFilter, opts.OperationIdFilter, opts.PathFilter, opts.ProjectName);
+
+            if (opts.TagFilter is not null || opts.OperationIdFilter is not null || opts.PathFilter is not null)
+                PruneUnreachableSchemas(controllers, dtos, enums);
 
             EmitAll(opts, dtos, enums, controllers, compatDllPath);
 
@@ -57,7 +60,7 @@ internal static class App
     private static Options? ParseArgs(string[] args)
     {
         string? input = null, output = null, projectName = "OpenApiClient", mainVbp = null;
-        string? tagFilter = null, schemaFilter = null, vb6Exe = null;
+        string? tagFilter = null, schemaFilter = null, opIdFilter = null, pathFilter = null, vb6Exe = null;
         bool clean = false, noSeed = false;
 
         for (int i = 0; i < args.Length; i++)
@@ -70,6 +73,8 @@ internal static class App
                 case "--main-vbp": mainVbp = args[++i]; break;
                 case "--tag-filter": tagFilter = args[++i]; break;
                 case "--schema-filter": schemaFilter = args[++i]; break;
+                case "--operation-id-filter": opIdFilter = args[++i]; break;
+                case "--path-filter": pathFilter = args[++i]; break;
                 case "--clean": clean = true; break;
                 case "--vb6-exe": vb6Exe = args[++i]; break;
                 case "--no-seed": noSeed = true; break;
@@ -96,6 +101,8 @@ internal static class App
             MainVbp = mainVbp,
             TagFilter = string.IsNullOrWhiteSpace(tagFilter) ? null : new Regex(tagFilter!),
             SchemaFilter = string.IsNullOrWhiteSpace(schemaFilter) ? null : new Regex(schemaFilter!),
+            OperationIdFilter = string.IsNullOrWhiteSpace(opIdFilter) ? null : new Regex(opIdFilter!),
+            PathFilter = string.IsNullOrWhiteSpace(pathFilter) ? null : new Regex(pathFilter!),
             Clean = clean,
             Vb6Exe = vb6Exe,
             NoSeed = noSeed
@@ -111,7 +118,16 @@ internal static class App
               --project-name <name>     default: OpenApiClient
               --main-vbp <path>         optional: host .vbp to copy Chilkat References from
               --tag-filter <regex>      optional: include only matching tags
-              --schema-filter <regex>   optional: include only matching schemas
+              --schema-filter <regex>   optional: include only matching schemas (applied before
+                                        reachability prune — if combined with an op/path/tag filter
+                                        and a kept op references a DTO this filter drops, the .cls
+                                        won't exist and the build will fail)
+              --operation-id-filter <regex>  optional: include only matching operationIds
+              --path-filter <regex>     optional: include only matching paths (useful when the spec
+                                        has no operationIds)
+                                        Any of --tag-filter / --operation-id-filter / --path-filter
+                                        triggers a reachability prune: DTOs and enums not referenced
+                                        by a kept op are dropped.
               --clean                   wipe output dir (preserves <project>.compat.dll)
               --vb6-exe <path>          override default VB6.EXE location for the compat-DLL build
               --no-seed                 skip the VB6 build (CI mode); .vbp falls back to CompatibleMode=0 if no .compat.dll
@@ -197,7 +213,7 @@ internal static class App
         return dto;
     }
 
-    private static List<ControllerModel> BuildControllerModels(OpenApiDocument doc, Vb6TypeMapper mapper, Regex? filter, string projectName)
+    private static List<ControllerModel> BuildControllerModels(OpenApiDocument doc, Vb6TypeMapper mapper, Regex? filter, Regex? opIdFilter, Regex? pathFilter, string projectName)
     {
         var byTag = new Dictionary<string, ControllerModel>(StringComparer.OrdinalIgnoreCase);
         if (doc.Paths is null) return new List<ControllerModel>();
@@ -207,10 +223,12 @@ internal static class App
 
         foreach (var (path, item) in doc.Paths)
         {
+            if (pathFilter is not null && !pathFilter.IsMatch(path)) continue;
             foreach (var (method, op) in item.Operations)
             {
                 var tag = op.Tags?.FirstOrDefault()?.Name ?? "Default";
                 if (filter is not null && !filter.IsMatch(tag)) continue;
+                if (opIdFilter is not null && !opIdFilter.IsMatch(op.OperationId ?? "")) continue;
                 if (!byTag.TryGetValue(tag, out var c))
                 {
                     var full = "c" + Vb6Naming.PascalCase(tag) + "Api";
@@ -242,6 +260,55 @@ internal static class App
             if (!used.Contains(candidate)) return candidate;
         }
         return baseName;
+    }
+
+    private static void PruneUnreachableSchemas(List<ControllerModel> controllers, List<DtoModel> dtos, List<EnumModel> enums)
+    {
+        var reachableDtos = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var reachableEnums = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var dtoIndex = dtos.ToDictionary(d => d.ClassName, StringComparer.OrdinalIgnoreCase);
+        var queue = new Queue<string>();
+
+        void Visit(Vb6Type? t)
+        {
+            if (t is null) return;
+            switch (t.Kind)
+            {
+                case Vb6Kind.DtoRef when t.DtoClassName is { } cn:
+                    if (reachableDtos.Add(cn)) queue.Enqueue(cn);
+                    break;
+                case Vb6Kind.Enum when t.EnumName is { } en:
+                    reachableEnums.Add(en);
+                    break;
+                case Vb6Kind.Collection:
+                    Visit(t.ItemType);
+                    break;
+            }
+        }
+
+        foreach (var c in controllers)
+        {
+            foreach (var op in c.Operations)
+            {
+                Visit(op.Body?.Type);
+                Visit(op.Response);
+                foreach (var p in op.PathParameters) Visit(p.Type);
+                foreach (var p in op.QueryParameters) Visit(p.Type);
+            }
+        }
+
+        while (queue.Count > 0)
+        {
+            var dtoName = queue.Dequeue();
+            if (!dtoIndex.TryGetValue(dtoName, out var dto)) continue;
+            foreach (var prop in dto.Properties) Visit(prop.Type);
+        }
+
+        var beforeDtos = dtos.Count;
+        var beforeEnums = enums.Count;
+        dtos.RemoveAll(d => !reachableDtos.Contains(d.ClassName));
+        enums.RemoveAll(e => !reachableEnums.Contains(e.EnumName));
+        Console.WriteLine($"Reachability prune: kept {dtos.Count}/{beforeDtos} DTOs and {enums.Count}/{beforeEnums} enums");
     }
 
     private static OperationModel BuildOperation(string method, string path, OpenApiOperation op, Vb6TypeMapper mapper)
@@ -421,6 +488,8 @@ internal static class App
         public string? MainVbp { get; init; }
         public Regex? TagFilter { get; init; }
         public Regex? SchemaFilter { get; init; }
+        public Regex? OperationIdFilter { get; init; }
+        public Regex? PathFilter { get; init; }
         public bool Clean { get; init; }
         public string? Vb6Exe { get; init; }
         public bool NoSeed { get; init; }

@@ -12,7 +12,7 @@ A .NET 10 console tool that reads an OpenAPI 3 spec and emits a VB6 ActiveX DLL 
 
 ```powershell
 dotnet build OpenApiVb6Gen.csproj
-dotnet run --project OpenApiVb6Gen.csproj -- --input <swagger.json|url> --output <dir> [--main-vbp <host.vbp>] [--clean] [--tag-filter <regex>] [--schema-filter <regex>] [--project-name <name>] [--vb6-exe <path>] [--no-seed]
+dotnet run --project OpenApiVb6Gen.csproj -- --input <swagger.json|url> --output <dir> [--main-vbp <host.vbp>] [--clean] [--tag-filter <regex>] [--operation-id-filter <regex>] [--path-filter <regex>] [--schema-filter <regex>] [--project-name <name>] [--vb6-exe <path>] [--no-seed]
 ```
 
 `TreatWarningsAsErrors=true` and `Nullable=enable` are set — any new C# warning fails the build. There is **no test project**.
@@ -120,6 +120,31 @@ Each HTTP verb's response is generated through a `*Call` switch in `ControllerEm
 - `EmitDelete` only handles primitive return shapes; a DELETE with a typed JSON body comes through as a comment.
 
 Per-DTO `Put*` helpers were added retroactively — early versions emitted `Set foo = PutJsonReturnString(...)` for Collection-returning PUTs, which fails to compile (String → Collection mismatch). If you add a new verb, also add the corresponding per-DTO helpers in `HelperEmitter.WriteDtoLoaders`.
+
+## Filter flags and reachability pruning
+
+Four filter flags can narrow what the generator emits. Three of them prune controllers, one prunes schemas:
+
+| Flag | What it filters | Triggers prune? |
+|---|---|---|
+| `--tag-filter <regex>` | OpenAPI tag (per operation) | yes |
+| `--operation-id-filter <regex>` | `op.OperationId ?? ""` (per operation) | yes |
+| `--path-filter <regex>` | path key (per path — drops every op on it) | yes |
+| `--schema-filter <regex>` | schema key in `Components.Schemas` | no (it *is* the prune for schemas, applied at `BuildSchemaModels`) |
+
+When any of the first three is set, `App.Run` calls `PruneUnreachableSchemas` after `BuildControllerModels`. That pass:
+
+1. Visits every kept operation's `Body.Type`, `Response`, `PathParameters[*].Type`, `QueryParameters[*].Type`. Each `DtoRef` seeds a BFS; each `Enum` is recorded as reachable; `Collection` recurses through `ItemType`.
+2. BFS walks DTO property types (which can reach more DTOs, more enums, more collections).
+3. Removes DTOs and enums not in the reachable set. Counts logged to stdout.
+
+Ordering matters: `Vb6Naming.SetSchemaAliases` runs **before** pruning (against the full schema set), so truncation/dedup of class names is stable regardless of which filters are active. A user can toggle filters between regens without DTO names shifting.
+
+Gotchas:
+
+- **`--schema-filter` + a controller-pruning flag** is the foot-gun. SchemaFilter runs first and can drop a DTO that a kept op still references — the controller `.cls` will emit a `c{Schema}` parameter for a class that no longer exists, and `VB6.EXE /make` will fail. Use one or the other, not both.
+- **Operations with `SkipReason` still pin their body DTO reachable.** `Visit(op.Body?.Type)` runs regardless of SkipReason. Acceptable, because the controller still emits a comment-out referencing the DTO name and consistency with non-skipped ops is easier.
+- **Compat-DLL invalidation.** First prune-enabled regen against an existing `.compat.dll` will drop CLSIDs for the now-removed DTOs. That's fine for the *removed* types (host can't reference what isn't generated) but **adding a previously-filtered DTO back later mints a fresh CLSID** — the compat DLL has no memory of it. If you're using filters in CI, either keep filter settings stable across regens or commit a separate compat DLL per filter set.
 
 ## Spec quirks that aren't generator bugs
 

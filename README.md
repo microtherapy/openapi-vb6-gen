@@ -44,8 +44,10 @@ dotnet run --project OpenApiVb6Gen.csproj -- `
 | `--output` | yes | Target directory for generated files |
 | `--project-name` | no | DLL/typelib name. Default `OpenApiClient` |
 | `--main-vbp` | no | Host `.vbp` to copy Chilkat `Reference=` / `Object=` lines from |
-| `--tag-filter` | no | Regex; only matching tags emitted |
-| `--schema-filter` | no | Regex; only matching schemas emitted |
+| `--tag-filter` | no | Regex; only matching tags emitted. Triggers a reachability prune (drops DTOs/enums no kept op references). |
+| `--operation-id-filter` | no | Regex; only matching `operationId`s emitted. Triggers a reachability prune. |
+| `--path-filter` | no | Regex; only matching paths emitted. Useful for specs without `operationId`s. Triggers a reachability prune. |
+| `--schema-filter` | no | Regex; only matching schemas emitted. **Applied before** the reachability prune — combining with the filters above can produce build failures if a kept op references a DTO this filter dropped. |
 | `--clean` | no | Wipe output dir before emitting (preserves `<project>.compat.dll`) |
 | `--vb6-exe` | no | Override VB6.EXE path used for the seed bootstrap (default: `C:\Program Files (x86)\Microsoft Visual Studio\VB98\VB6.EXE`) |
 | `--no-seed` | no | Skip the seed bootstrap (use when VB6 isn't installed, e.g. CI). Generated `.vbp` falls back to `CompatibleMode=0` |
