@@ -21,6 +21,8 @@ VB6 has no first-class HTTP/JSON tooling and no equivalent of NSwag or OpenAPI G
 
 ## Build
 
+Requires a .NET 10 SDK (the project targets `net10.0`).
+
 ```powershell
 dotnet build OpenApiVb6Gen.csproj
 ```

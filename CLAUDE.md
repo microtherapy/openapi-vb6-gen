@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A .NET 8 console tool that reads an OpenAPI 3 spec and emits a VB6 ActiveX DLL sub-project (`.vbp` + `.cls` files + `modGenApi.bas`) implementing a typed HTTP client. Output is VB6 source. Verification of generated code requires either the VB6 IDE or the VB6 command line — see "Compiling the generated client" below.
+A .NET 10 console tool that reads an OpenAPI 3 spec and emits a VB6 ActiveX DLL sub-project (`.vbp` + `.cls` files + `modGenApi.bas`) implementing a typed HTTP client. Output is VB6 source. Verification of generated code requires either the VB6 IDE or the VB6 command line — see "Compiling the generated client" below.
 
 `README.md` covers user-facing usage (flags, generated layout, host integration). This file covers internals and the VB6/Chilkat 11 gotchas.
 
@@ -17,7 +17,7 @@ dotnet run --project OpenApiVb6Gen.csproj -- --input <swagger.json|url> --output
 
 `TreatWarningsAsErrors=true` and `Nullable=enable` are set — any new C# warning fails the build. There is **no test project**.
 
-If the dev box has a newer .NET runtime than `net8.0` (e.g. only `net10`), set `DOTNET_ROLL_FORWARD=Major` for that shell.
+Target framework is `net10.0`. The dev box needs a .NET 10 SDK; earlier SDKs will fail with `NETSDK1045`. (Project previously targeted `net8.0`; bumped because the workspace's other tooling moved to .NET 10 and the roll-forward workaround was noise.)
 
 ## Compiling the generated client
 
