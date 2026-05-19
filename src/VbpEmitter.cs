@@ -16,12 +16,9 @@ internal sealed class VbpEmitter
     {
         var sb = new StringBuilder();
         sb.AppendLine("Type=OleDll");
-        var refs = TryCollectChilkatReferences(i.MainVbpPath);
+        var refs = TryCollectChilkat11References(i.MainVbpPath);
         if (refs.Count == 0)
-        {
-            sb.AppendLine("' TODO: Open the .vbp in VB6 IDE, Project -> References, add Chilkat ActiveX. The");
-            sb.AppendLine("'       Reference= line will be saved on next IDE save.");
-        }
+            refs.Add(@"Reference=*\G{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}#1.0#0#C:\Windows\SysWow64\ChilkatAx-win32.dll#Chilkat ActiveX v11.0.0");
         foreach (var r in refs)
             sb.AppendLine(r);
         foreach (var m in i.ModuleFiles)
@@ -80,19 +77,20 @@ internal sealed class VbpEmitter
         return sb.ToString();
     }
 
-    private static List<string> TryCollectChilkatReferences(string? mainVbpPath)
+    private static List<string> TryCollectChilkat11References(string? mainVbpPath)
     {
         var result = new List<string>();
         if (string.IsNullOrWhiteSpace(mainVbpPath) || !File.Exists(mainVbpPath))
             return result;
+        const string chilkat11TypelibGuid = "{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}";
         foreach (var line in File.ReadAllLines(mainVbpPath))
         {
-            if ((line.StartsWith("Reference=", StringComparison.OrdinalIgnoreCase) ||
-                 line.StartsWith("Object=", StringComparison.OrdinalIgnoreCase))
-                && line.Contains("Chilkat", StringComparison.OrdinalIgnoreCase))
-            {
+            if (!line.StartsWith("Reference=", StringComparison.OrdinalIgnoreCase) &&
+                !line.StartsWith("Object=", StringComparison.OrdinalIgnoreCase))
+                continue;
+            if (!line.Contains("Chilkat", StringComparison.OrdinalIgnoreCase)) continue;
+            if (line.Contains(chilkat11TypelibGuid, StringComparison.OrdinalIgnoreCase))
                 result.Add(line);
-            }
         }
         return result;
     }

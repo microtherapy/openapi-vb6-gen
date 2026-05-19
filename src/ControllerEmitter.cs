@@ -214,6 +214,7 @@ internal sealed class ControllerEmitter
         Vb6Kind.Boolean => "modGenApi.GetBool(mApi, url)",
         Vb6Kind.Date => "modGenApi.ParseIso(modGenApi.GetString(mApi, url))",
         Vb6Kind.ChilkatJsonObject => "modGenApi.GetJsonObject(mApi, url)",
+        Vb6Kind.Binary => "modGenApi.GetBytes(mApi, url)",
         _ => "modGenApi.GetString(mApi, url)"
     };
 
@@ -243,6 +244,7 @@ internal sealed class ControllerEmitter
         Vb6Kind.String => $"modGenApi.PostJsonReturnString(mApi, url, {bodyArg})",
         Vb6Kind.Long or Vb6Kind.Enum => $"modGenApi.PostJsonReturnLong(mApi, url, {bodyArg})",
         Vb6Kind.ChilkatJsonObject => $"modGenApi.PostJsonReturnObject(mApi, url, {bodyArg})",
+        Vb6Kind.Binary => $"modGenApi.PostJsonReturnBytes(mApi, url, {bodyArg})",
         _ => $"modGenApi.PostJsonReturnString(mApi, url, {bodyArg})"
     };
 
@@ -250,6 +252,11 @@ internal sealed class ControllerEmitter
     {
         var bodyArg = op.Body is null ? "Nothing" : BodyArg(op.Body);
         if (resp is null) { w.Line($"modGenApi.PutJsonVoid mApi, url, {bodyArg}"); return; }
+        if (resp.Kind == Vb6Kind.Binary)
+        {
+            w.Line($"' PUT with binary response body ({resp.Declaration}) not supported by generated helpers");
+            return;
+        }
         w.Line($"{ResponseAssignPrefix(resp)}{op.VbMethodName} = {PutCall(resp, bodyArg)}");
     }
 

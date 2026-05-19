@@ -24,6 +24,8 @@ internal sealed class HelperEmitter
         w.Line();
         WritePostPutDelete(w);
         w.Line();
+        WriteBinaryHelpers(w);
+        w.Line();
         WriteDtoLoaders(w, dtos);
         w.Line();
         WritePrimitiveListHelpers(w);
@@ -516,6 +518,42 @@ internal sealed class HelperEmitter
         w.Line("WrapScalarJson.UpdateString \"value\", CStr(v)");
         w.Outdent();
         w.Line("End Function");
+    }
+
+    private static void WriteBinaryHelpers(Vb6Writer w)
+    {
+        w.Line("Public Function GetBytes(ByVal api As cApi, ByVal url As String) As Variant");
+        w.Indent();
+        w.Line("Dim http As ChilkatHttp: Set http = NewHttp(api)");
+        w.Line("Dim resp As ChilkatHttpResponse");
+        w.Line("Set resp = http.QuickRequest(\"GET\", url)");
+        w.Line("EnsureRespOk resp, \"GET \" & url");
+        w.Line("GetBytes = resp.Body");
+        w.Outdent();
+        w.Line("End Function");
+        w.Line();
+
+        w.Line("Public Function PostJsonReturnBytes(ByVal api As cApi, ByVal url As String, ByVal body As ChilkatJsonObject) As Variant");
+        w.Indent();
+        w.Line("Dim http As ChilkatHttp: Set http = NewHttp(api)");
+        w.Line("Dim jsonStr As String: If Not body Is Nothing Then jsonStr = body.Emit() Else jsonStr = \"\"");
+        w.Line("Dim resp As ChilkatHttpResponse");
+        w.Line("Set resp = http.PostJson2(url, gcContentType, jsonStr)");
+        w.Line("EnsureRespOk resp, \"POST \" & url");
+        w.Line("PostJsonReturnBytes = resp.Body");
+        w.Outdent();
+        w.Line("End Function");
+        w.Line();
+
+        w.Line("Public Sub SaveBytesToFile(ByVal data As Variant, ByVal path As String)");
+        w.Indent();
+        w.Line("Dim b() As Byte: b = data");
+        w.Line("Dim fnum As Integer: fnum = FreeFile");
+        w.Line("Open path For Binary Access Write As #fnum");
+        w.Line("Put #fnum, , b");
+        w.Line("Close #fnum");
+        w.Outdent();
+        w.Line("End Sub");
     }
 
     private static void WriteDateHelpers(Vb6Writer w)

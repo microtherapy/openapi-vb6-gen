@@ -84,9 +84,14 @@ The output is an `Type=OleDll` (ActiveX DLL). The DLL's public surface is **only
 
 VB6 ActiveX DLLs are subject to a hard limit of **39 characters total for `<LibraryName>.<ClassName>`** (the COM ProgID). Exceeding this fails the link step with `Programmatic ID string too long '...'`.
 
-The generator enforces this in `BuildControllerModels` by computing `maxClassLen = 39 - projectName.Length - 1` and truncating + de-duplicating class names via `TruncateUnique`. Callers should still pick short `--project-name` (≤8 chars is comfortable; the default `OpenApiClient` is 13 which leaves only 25 chars for class names and may force more truncation than ideal).
+The generator enforces this on two paths:
 
-DTO class names from `Components.Schemas` are **not** currently truncated by the generator — a spec with schema names longer than `maxClassLen` would still fail. If that ever happens, the same `TruncateUnique` pass needs to run in `BuildSchemaModels` AND the resulting truncated name must be plumbed back through `Vb6TypeMapper.Map` so `$ref` resolution uses the truncated name. Today this works only because the specs we've tested have schema names ≤32 chars.
+- **Controller classes** (`BuildControllerModels` in `Program.cs`): `maxClassLen = 39 - projectName.Length - 1` (minus 1 for the ProgID dot), truncated + de-duplicated via `TruncateUnique`. The whole `"c"+Tag+"Api"` string is what gets truncated.
+- **DTO / enum classes** (`Vb6Naming.BuildSchemaAliasMap`, seeded once from `App.Run`): `maxAliasLen = 39 - projectName.Length - 2` (minus 1 for the dot, minus 1 for the `c`/`e` prefix). The map is keyed by the raw OpenAPI schema name and stored as static state on `Vb6Naming`; `ClassName`/`EnumName` look up the alias on every call, so `Vb6TypeMapper.Map` automatically picks up truncated names when resolving `$ref`s. For namespaced names like `Foo.Bar.Baz` the alias starts as the last segment (`Baz`) and walks back through the namespace on collision (`Bar_Baz`, `Foo_Bar_Baz`).
+
+Callers should still pick short `--project-name` (≤8 chars is comfortable; the default `OpenApiClient` is 13 which leaves only 24 chars for DTO names and may force more truncation than ideal).
+
+Only schemas declared in `Components.Schemas` get an alias entry — an inline schema referenced by `$ref` from outside components would bypass the truncation. The specs we've tested don't hit this case.
 
 ## Chilkat 11 API gotchas
 

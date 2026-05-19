@@ -14,7 +14,8 @@ internal enum Vb6Kind
     Enum,
     DtoRef,
     ChilkatJsonObject,
-    Collection
+    Collection,
+    Binary
 }
 
 internal sealed class Vb6Type

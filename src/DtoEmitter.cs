@@ -15,7 +15,7 @@ internal sealed class DtoEmitter
         }
 
         foreach (var p in dto.Properties)
-            w.Line($"Private m{p.VbName} As {p.Type.Declaration}");
+            w.Line($"Private m_{p.VbName} As {p.Type.Declaration}");
         w.Line();
 
         foreach (var p in dto.Properties)
@@ -54,19 +54,19 @@ internal sealed class DtoEmitter
         if (p.Type.IsCollection || p.Type.IsDtoRef || p.Type.Kind == Vb6Kind.ChilkatJsonObject)
         {
             w.Line($"Public Property Get {p.VbName}() As {p.Type.Declaration}");
-            w.Indent().Line($"Set {p.VbName} = m{p.VbName}").Outdent();
+            w.Indent().Line($"Set {p.VbName} = m_{p.VbName}").Outdent();
             w.Line("End Property");
             w.Line($"Public Property Set {p.VbName}(ByVal v As {p.Type.Declaration})");
-            w.Indent().Line($"Set m{p.VbName} = v").Outdent();
+            w.Indent().Line($"Set m_{p.VbName} = v").Outdent();
             w.Line("End Property");
         }
         else
         {
             w.Line($"Public Property Get {p.VbName}() As {p.Type.Declaration}");
-            w.Indent().Line($"{p.VbName} = m{p.VbName}").Outdent();
+            w.Indent().Line($"{p.VbName} = m_{p.VbName}").Outdent();
             w.Line("End Property");
             w.Line($"Public Property Let {p.VbName}(ByVal v As {p.Type.Declaration})");
-            w.Indent().Line($"m{p.VbName} = v").Outdent();
+            w.Indent().Line($"m_{p.VbName} = v").Outdent();
             w.Line("End Property");
         }
     }
@@ -88,41 +88,41 @@ internal sealed class DtoEmitter
         switch (p.Type.Kind)
         {
             case Vb6Kind.String:
-                w.Line($"m{p.VbName} = obj.StringOf({jn})");
+                w.Line($"m_{p.VbName} = obj.StringOf({jn})");
                 break;
             case Vb6Kind.Long:
-                w.Line($"m{p.VbName} = obj.IntOf({jn})");
+                w.Line($"m_{p.VbName} = obj.IntOf({jn})");
                 break;
             case Vb6Kind.Currency:
-                w.Line($"m{p.VbName} = CCur(obj.IntOf({jn}))");
+                w.Line($"m_{p.VbName} = CCur(obj.IntOf({jn}))");
                 break;
             case Vb6Kind.Double:
-                w.Line($"m{p.VbName} = CDbl(Val(obj.StringOf({jn})))");
+                w.Line($"m_{p.VbName} = CDbl(Val(obj.StringOf({jn})))");
                 break;
             case Vb6Kind.Boolean:
-                w.Line($"m{p.VbName} = obj.BoolOf({jn})");
+                w.Line($"m_{p.VbName} = obj.BoolOf({jn})");
                 break;
             case Vb6Kind.Date:
-                w.Line($"m{p.VbName} = modGenApi.ParseIso(obj.StringOf({jn}))");
+                w.Line($"m_{p.VbName} = modGenApi.ParseIso(obj.StringOf({jn}))");
                 break;
             case Vb6Kind.Enum:
-                w.Line($"m{p.VbName} = obj.IntOf({jn})");
+                w.Line($"m_{p.VbName} = obj.IntOf({jn})");
                 break;
             case Vb6Kind.Variant:
                 w.Line($"If obj.IsNullOf({jn}) Then");
-                w.Indent().Line($"m{p.VbName} = Empty").Outdent();
+                w.Indent().Line($"m_{p.VbName} = Empty").Outdent();
                 w.Line("Else");
-                w.Indent().Line($"m{p.VbName} = obj.StringOf({jn})").Outdent();
+                w.Indent().Line($"m_{p.VbName} = obj.StringOf({jn})").Outdent();
                 w.Line("End If");
                 break;
             case Vb6Kind.DtoRef:
-                w.Line($"Set m{p.VbName} = modGenApi.LoadDto_{p.Type.DtoClassName}(obj, {jn})");
+                w.Line($"Set m_{p.VbName} = modGenApi.LoadDto_{p.Type.DtoClassName}(obj, {jn})");
                 break;
             case Vb6Kind.Collection:
                 EmitCollectionLoad(w, p, jn);
                 break;
             case Vb6Kind.ChilkatJsonObject:
-                w.Line($"Set m{p.VbName} = obj.ObjectOf({jn})");
+                w.Line($"Set m_{p.VbName} = obj.ObjectOf({jn})");
                 break;
         }
     }
@@ -142,7 +142,7 @@ internal sealed class DtoEmitter
             Vb6Kind.Enum => "LoadList_Long",
             _ => "LoadList_Variant"
         };
-        w.Line($"Set m{p.VbName} = modGenApi.{helper}(obj, {jn})");
+        w.Line($"Set m_{p.VbName} = modGenApi.{helper}(obj, {jn})");
     }
 
     private static void WriteToJson(Vb6Writer w, DtoModel dto)
@@ -162,42 +162,42 @@ internal sealed class DtoEmitter
         switch (p.Type.Kind)
         {
             case Vb6Kind.String:
-                w.Line($"ToJson.UpdateString {jn}, m{p.VbName}");
+                w.Line($"ToJson.UpdateString {jn}, m_{p.VbName}");
                 break;
             case Vb6Kind.Long:
             case Vb6Kind.Enum:
-                w.Line($"ToJson.UpdateInt {jn}, m{p.VbName}");
+                w.Line($"ToJson.UpdateInt {jn}, m_{p.VbName}");
                 break;
             case Vb6Kind.Currency:
-                w.Line($"ToJson.UpdateInt {jn}, CLng(m{p.VbName})");
+                w.Line($"ToJson.UpdateInt {jn}, CLng(m_{p.VbName})");
                 break;
             case Vb6Kind.Double:
-                w.Line($"ToJson.UpdateNumber {jn}, CStr(m{p.VbName})");
+                w.Line($"ToJson.UpdateNumber {jn}, CStr(m_{p.VbName})");
                 break;
             case Vb6Kind.Boolean:
-                w.Line($"ToJson.UpdateBool {jn}, m{p.VbName}");
+                w.Line($"ToJson.UpdateBool {jn}, m_{p.VbName}");
                 break;
             case Vb6Kind.Date:
-                w.Line($"ToJson.UpdateString {jn}, modGenApi.Iso(m{p.VbName})");
+                w.Line($"ToJson.UpdateString {jn}, modGenApi.Iso(m_{p.VbName})");
                 break;
             case Vb6Kind.Variant:
-                w.Line($"If IsEmpty(m{p.VbName}) Then");
+                w.Line($"If IsEmpty(m_{p.VbName}) Then");
                 w.Indent().Line($"ToJson.UpdateNull {jn}").Outdent();
                 w.Line("Else");
-                w.Indent().Line($"ToJson.UpdateString {jn}, CStr(m{p.VbName})").Outdent();
+                w.Indent().Line($"ToJson.UpdateString {jn}, CStr(m_{p.VbName})").Outdent();
                 w.Line("End If");
                 break;
             case Vb6Kind.DtoRef:
-                w.Line($"modGenApi.AppendDto_{p.Type.DtoClassName} ToJson, {jn}, m{p.VbName}");
+                w.Line($"modGenApi.AppendDto_{p.Type.DtoClassName} ToJson, {jn}, m_{p.VbName}");
                 break;
             case Vb6Kind.Collection:
                 EmitCollectionSave(w, p, jn);
                 break;
             case Vb6Kind.ChilkatJsonObject:
-                w.Line($"If Not m{p.VbName} Is Nothing Then");
+                w.Line($"If Not m_{p.VbName} Is Nothing Then");
                 w.Indent();
                 w.Line($"ToJson.AddObjectAt -1, {jn}");
-                w.Line($"ToJson.ObjectOf({jn}).Load m{p.VbName}.Emit()");
+                w.Line($"ToJson.ObjectOf({jn}).Load m_{p.VbName}.Emit()");
                 w.Outdent();
                 w.Line("End If");
                 break;
@@ -219,6 +219,6 @@ internal sealed class DtoEmitter
             Vb6Kind.Enum => "AppendList_Long",
             _ => "AppendList_Variant"
         };
-        w.Line($"modGenApi.{helper} ToJson, {jn}, m{p.VbName}");
+        w.Line($"modGenApi.{helper} ToJson, {jn}, m_{p.VbName}");
     }
 }

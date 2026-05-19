@@ -93,9 +93,73 @@ internal static class Vb6Naming
 
     public static string ModuleName(string tag) => "mod" + PascalCase(tag) + "Client";
 
-    public static string ClassName(string schemaName) => "c" + PascalCase(schemaName);
+    private static IReadOnlyDictionary<string, string>? _schemaAliases;
 
-    public static string EnumName(string schemaName) => "e" + PascalCase(schemaName);
+    public static void SetSchemaAliases(IReadOnlyDictionary<string, string>? map) => _schemaAliases = map;
+
+    private static string Alias(string schemaName)
+        => _schemaAliases is not null && _schemaAliases.TryGetValue(schemaName, out var v) ? v : schemaName;
+
+    public static string ClassName(string schemaName) => "c" + PascalCase(Alias(schemaName));
+
+    public static string EnumName(string schemaName) => "e" + PascalCase(Alias(schemaName));
+
+    public static IReadOnlyDictionary<string, string> BuildSchemaAliasMap(IEnumerable<string> rawNames, int maxAliasLen = int.MaxValue)
+    {
+        var names = rawNames.Distinct().ToList();
+        if (names.Count == 0) return new Dictionary<string, string>();
+
+        var parts = names.ToDictionary(n => n, SplitNamespace);
+        var depth = names.ToDictionary(n => n, _ => 1);
+
+        Dictionary<string, string> aliases = names.ToDictionary(n => n, _ => "");
+        for (int iter = 0; iter < 32; iter++)
+        {
+            aliases = names.ToDictionary(n => n, n => TakeLastSegments(parts[n], depth[n]));
+            var collisions = aliases
+                .GroupBy(kv => PascalCase(kv.Value), StringComparer.OrdinalIgnoreCase)
+                .Where(g => g.Count() > 1)
+                .ToList();
+            if (collisions.Count == 0) break;
+
+            bool advanced = false;
+            foreach (var g in collisions)
+                foreach (var kv in g)
+                    if (depth[kv.Key] < parts[kv.Key].Count) { depth[kv.Key]++; advanced = true; }
+
+            if (!advanced) break;
+        }
+
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var key in aliases.Keys.OrderBy(k => k, StringComparer.Ordinal).ToList())
+        {
+            var pc = PascalCase(aliases[key]);
+            if (pc.Length > maxAliasLen) pc = pc[..maxAliasLen];
+            if (used.Contains(pc))
+            {
+                for (int n = 2; n < 10000; n++)
+                {
+                    var suf = n.ToString();
+                    var trim = Math.Min(pc.Length, Math.Max(1, maxAliasLen - suf.Length));
+                    var cand = pc[..trim] + suf;
+                    if (!used.Contains(cand)) { pc = cand; break; }
+                }
+            }
+            aliases[key] = pc;
+            used.Add(pc);
+        }
+        return aliases;
+    }
+
+    private static List<string> SplitNamespace(string raw)
+        => raw.Split(new[] { '.', '+', '/' }, StringSplitOptions.RemoveEmptyEntries).ToList();
+
+    private static string TakeLastSegments(List<string> parts, int count)
+    {
+        if (parts.Count == 0) return "X";
+        var n = Math.Min(count, parts.Count);
+        return string.Join("_", parts.Skip(parts.Count - n));
+    }
 
     private static readonly System.Text.RegularExpressions.Regex VersionSegment =
         new(@"^v[\d.]+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase);

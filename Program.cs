@@ -27,6 +27,11 @@ internal static class App
 
         try
         {
+            var maxAliasLen = Math.Max(4, 39 - opts.ProjectName.Length - 1 - 1);
+            Vb6Naming.SetSchemaAliases(doc.Components?.Schemas is { } s
+                ? Vb6Naming.BuildSchemaAliasMap(s.Keys, maxAliasLen)
+                : null);
+
             var typeMapper = new Vb6TypeMapper();
             var (dtos, enums) = BuildSchemaModels(doc, typeMapper, opts.SchemaFilter);
             var controllers = BuildControllerModels(doc, typeMapper, opts.TagFilter, opts.ProjectName);
@@ -138,13 +143,13 @@ internal static class App
             if (v is Microsoft.OpenApi.Any.OpenApiInteger oi)
                 en.Members.Add(new EnumMember
                 {
-                    VbName = Vb6Naming.SafeIdentifier($"V{oi.Value}"),
+                    VbName = Vb6Naming.SafeIdentifier(oi.Value < 0 ? $"VNeg{-oi.Value}" : $"V{oi.Value}"),
                     IntValue = oi.Value
                 });
             else if (v is Microsoft.OpenApi.Any.OpenApiLong ol)
                 en.Members.Add(new EnumMember
                 {
-                    VbName = Vb6Naming.SafeIdentifier($"V{ol.Value}"),
+                    VbName = Vb6Naming.SafeIdentifier(ol.Value < 0 ? $"VNeg{-ol.Value}" : $"V{ol.Value}"),
                     IntValue = ol.Value
                 });
             else if (v is Microsoft.OpenApi.Any.OpenApiString os)
@@ -286,11 +291,25 @@ internal static class App
                 var json = success.Value.Content.FirstOrDefault(kv => kv.Key.Contains("json", StringComparison.OrdinalIgnoreCase));
                 if (json.Value?.Schema is not null)
                     model.Response = mapper.Map(json.Value.Schema);
+                else if (LooksLikeBinaryResponse(success.Value.Content))
+                    model.Response = new Vb6Type { Kind = Vb6Kind.Binary, Declaration = "Variant" };
                 else
                     model.Response = new Vb6Type { Kind = Vb6Kind.String, Declaration = "String" };
             }
         }
         return model;
+    }
+
+    private static bool LooksLikeBinaryResponse(IDictionary<string, OpenApiMediaType> content)
+    {
+        foreach (var (mt, media) in content)
+        {
+            if (mt.StartsWith("application/pdf", StringComparison.OrdinalIgnoreCase)) return true;
+            if (mt.StartsWith("application/octet-stream", StringComparison.OrdinalIgnoreCase)) return true;
+            if (mt.StartsWith("image/", StringComparison.OrdinalIgnoreCase)) return true;
+            if (media.Schema is { Type: "string", Format: "binary" }) return true;
+        }
+        return false;
     }
 
     private static void EmitAll(Options opts, List<DtoModel> dtos, List<EnumModel> enums, List<ControllerModel> controllers)
