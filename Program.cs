@@ -62,6 +62,7 @@ internal static class App
         string? input = null, output = null, projectName = "OpenApiClient", mainVbp = null;
         string? tagFilter = null, schemaFilter = null, opIdFilter = null, pathFilter = null, vb6Exe = null;
         bool clean = false, noSeed = false;
+        var chilkat = ChilkatVersion.V11;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -78,6 +79,15 @@ internal static class App
                 case "--clean": clean = true; break;
                 case "--vb6-exe": vb6Exe = args[++i]; break;
                 case "--no-seed": noSeed = true; break;
+                case "--chilkat-version":
+                    var v = args[++i];
+                    chilkat = v switch
+                    {
+                        "9.5" or "9" => ChilkatVersion.V9_5,
+                        "11" or "11.0" => ChilkatVersion.V11,
+                        _ => throw new ArgumentException($"--chilkat-version: expected 9.5 or 11, got '{v}'")
+                    };
+                    break;
                 case "-h" or "--help": PrintHelp(); return null;
                 default:
                     Console.Error.WriteLine($"Unknown argument: {args[i]}");
@@ -105,7 +115,8 @@ internal static class App
             PathFilter = string.IsNullOrWhiteSpace(pathFilter) ? null : new Regex(pathFilter!),
             Clean = clean,
             Vb6Exe = vb6Exe,
-            NoSeed = noSeed
+            NoSeed = noSeed,
+            Chilkat = chilkat
         };
     }
 
@@ -131,6 +142,9 @@ internal static class App
               --clean                   wipe output dir (preserves <project>.compat.dll)
               --vb6-exe <path>          override default VB6.EXE location for the compat-DLL build
               --no-seed                 skip the VB6 build (CI mode); .vbp falls back to CompatibleMode=0 if no .compat.dll
+              --chilkat-version <ver>   target Chilkat 9.5 or 11 (default: 11). Class names are
+                                        identical between versions; only the typelib reference differs.
+                                        Use 9.5 when the host vbp already references Chilkat 9.5.
             """);
     }
 
@@ -436,7 +450,8 @@ internal static class App
             ClassFiles = classFiles,
             ModuleFiles = moduleFiles,
             MainVbpPath = opts.MainVbp,
-            CompatibleExePath = null
+            CompatibleExePath = null,
+            Chilkat = opts.Chilkat
         };
         var vbpPath = Path.Combine(opts.Output, opts.ProjectName + ".vbp");
 
@@ -494,5 +509,6 @@ internal static class App
         public bool Clean { get; init; }
         public string? Vb6Exe { get; init; }
         public bool NoSeed { get; init; }
+        public ChilkatVersion Chilkat { get; init; } = ChilkatVersion.V11;
     }
 }

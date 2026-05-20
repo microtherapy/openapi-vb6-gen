@@ -2,6 +2,34 @@ using System.Text;
 
 namespace OpenApiVb6Gen;
 
+internal enum ChilkatVersion
+{
+    V9_5,
+    V11
+}
+
+internal sealed record ChilkatTarget(string TypelibGuid, string DllFileName, string ReferenceDescription, string TypelibVersion)
+{
+    public static readonly ChilkatTarget V9_5 = new(
+        "{004CB902-F437-4D01-BD85-9E18836DA5C2}",
+        "ChilkatAx-9.5.0-win32.dll",
+        "Chilkat ActiveX v9.5.0",
+        "1.0");
+
+    public static readonly ChilkatTarget V11 = new(
+        "{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}",
+        "ChilkatAx-win32.dll",
+        "Chilkat ActiveX v11.0.0",
+        "1.0");
+
+    public static ChilkatTarget For(ChilkatVersion v) => v switch
+    {
+        ChilkatVersion.V9_5 => V9_5,
+        ChilkatVersion.V11 => V11,
+        _ => V11
+    };
+}
+
 internal sealed record VbpEmitterInputs
 {
     public required string ProjectName { get; init; }
@@ -10,6 +38,7 @@ internal sealed record VbpEmitterInputs
     public required IReadOnlyList<string> ModuleFiles { get; init; }
     public string? MainVbpPath { get; init; }
     public string? CompatibleExePath { get; init; }
+    public ChilkatVersion Chilkat { get; init; } = ChilkatVersion.V11;
 }
 
 internal sealed class VbpEmitter
@@ -18,9 +47,10 @@ internal sealed class VbpEmitter
     {
         var sb = new StringBuilder();
         sb.AppendLine("Type=OleDll");
-        var refs = TryCollectChilkat11References(i.MainVbpPath, i.OutputDir);
+        var target = ChilkatTarget.For(i.Chilkat);
+        var refs = TryCollectChilkatReferences(i.MainVbpPath, i.OutputDir, target.TypelibGuid);
         if (refs.Count == 0)
-            refs.Add(BuildChilkat11ReferenceFromRegistry(i.OutputDir));
+            refs.Add(BuildChilkatReferenceFromRegistry(i.OutputDir, target));
         foreach (var r in refs)
             sb.AppendLine(r);
         foreach (var m in i.ModuleFiles)
@@ -87,9 +117,7 @@ internal sealed class VbpEmitter
         return sb.ToString();
     }
 
-    private const string Chilkat11TypelibGuid = "{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}";
-
-    private static List<string> TryCollectChilkat11References(string? mainVbpPath, string outputDir)
+    private static List<string> TryCollectChilkatReferences(string? mainVbpPath, string outputDir, string typelibGuid)
     {
         var result = new List<string>();
         if (string.IsNullOrWhiteSpace(mainVbpPath) || !File.Exists(mainVbpPath))
@@ -101,7 +129,7 @@ internal sealed class VbpEmitter
                 !line.StartsWith("Object=", StringComparison.OrdinalIgnoreCase))
                 continue;
             if (!line.Contains("Chilkat", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!line.Contains(Chilkat11TypelibGuid, StringComparison.OrdinalIgnoreCase)) continue;
+            if (!line.Contains(typelibGuid, StringComparison.OrdinalIgnoreCase)) continue;
             // Reference line in main vbp may have a path relative to main vbp's folder.
             // Re-anchor it to outputDir so it remains valid when written to the generated vbp.
             result.Add(RebaseVbpReferenceLine(line, mainVbpDir, outputDir));
@@ -110,17 +138,30 @@ internal sealed class VbpEmitter
     }
 
     /// <summary>
-    /// Builds a synthetic Chilkat 11 Reference= line, looking up the typelib's
-    /// registered file path and making it relative to <paramref name="outputDir"/>.
-    /// Falls back to the absolute path if not registered.
+    /// Builds a synthetic Chilkat Reference= line for the requested version, looking
+    /// up the typelib's registered file path and making it relative to
+    /// <paramref name="outputDir"/>. Falls back to a sensible default path if the
+    /// typelib isn't registered on this machine.
     /// </summary>
-    private static string BuildChilkat11ReferenceFromRegistry(string outputDir)
+    private static string BuildChilkatReferenceFromRegistry(string outputDir, ChilkatTarget target)
     {
-        var registeredPath = Vb6Bootstrap.LookupTypelibPath(Chilkat11TypelibGuid, "1.0");
-        var path = registeredPath is not null
-            ? MakeRelativeIfPossible(outputDir, registeredPath)
-            : @"..\..\..\Program Files (x86)\Chilkat Software, Inc\Chilkat 32-bit ActiveX\ChilkatAx-win32.dll";
-        return $@"Reference=*\G{Chilkat11TypelibGuid}#1.0#0#{path}#Chilkat ActiveX v11.0.0";
+        var registeredPath = Vb6Bootstrap.LookupTypelibPath(target.TypelibGuid, target.TypelibVersion);
+        string path;
+        if (registeredPath is not null)
+        {
+            path = MakeRelativeIfPossible(outputDir, registeredPath);
+        }
+        else if (target == ChilkatTarget.V11)
+        {
+            path = @"..\..\..\Program Files (x86)\Chilkat Software, Inc\Chilkat 32-bit ActiveX\ChilkatAx-win32.dll";
+        }
+        else
+        {
+            // Chilkat 9.5 doesn't have a canonical install location; just use the bare
+            // filename and let VB6 fall back to its DLL search order.
+            path = target.DllFileName;
+        }
+        return $@"Reference=*\G{target.TypelibGuid}#{target.TypelibVersion}#0#{path}#{target.ReferenceDescription}";
     }
 
     /// <summary>
