@@ -5,6 +5,7 @@ namespace OpenApiVb6Gen;
 internal sealed record VbpEmitterInputs
 {
     public required string ProjectName { get; init; }
+    public required string OutputDir { get; init; }
     public required IReadOnlyList<string> ClassFiles { get; init; }
     public required IReadOnlyList<string> ModuleFiles { get; init; }
     public string? MainVbpPath { get; init; }
@@ -17,9 +18,9 @@ internal sealed class VbpEmitter
     {
         var sb = new StringBuilder();
         sb.AppendLine("Type=OleDll");
-        var refs = TryCollectChilkat11References(i.MainVbpPath);
+        var refs = TryCollectChilkat11References(i.MainVbpPath, i.OutputDir);
         if (refs.Count == 0)
-            refs.Add(@"Reference=*\G{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}#1.0#0#C:\Windows\SysWow64\ChilkatAx-win32.dll#Chilkat ActiveX v11.0.0");
+            refs.Add(BuildChilkat11ReferenceFromRegistry(i.OutputDir));
         foreach (var r in refs)
             sb.AppendLine(r);
         foreach (var m in i.ModuleFiles)
@@ -35,7 +36,7 @@ internal sealed class VbpEmitter
         if (!string.IsNullOrWhiteSpace(i.CompatibleExePath) && File.Exists(i.CompatibleExePath))
         {
             sb.AppendLine("CompatibleMode=\"2\"");
-            sb.AppendLine($"CompatibleEXE32=\"{i.CompatibleExePath}\"");
+            sb.AppendLine($"CompatibleEXE32=\"{MakeRelativeIfPossible(i.OutputDir, i.CompatibleExePath)}\"");
         }
         else
         {
@@ -44,7 +45,7 @@ internal sealed class VbpEmitter
         sb.AppendLine("MajorVer=1");
         sb.AppendLine("MinorVer=0");
         sb.AppendLine("RevisionVer=0");
-        sb.AppendLine("AutoIncrementVer=1");
+        sb.AppendLine("AutoIncrementVer=0");
         sb.AppendLine("ServerSupportFiles=0");
         sb.AppendLine("VersionCompanyName=\"Generated\"");
         sb.AppendLine("CompilationType=0");
@@ -75,32 +76,91 @@ internal sealed class VbpEmitter
         return sb.ToString();
     }
 
-    public string EmitVbg(string projectName, string? hostVbpAbsolutePath, string clientVbpRelativeFromVbg)
+    public string EmitVbg(string projectName, string? hostVbpAbsolutePath, string clientVbpRelativeFromVbg, string outputDir)
     {
         var sb = new StringBuilder();
         sb.AppendLine("VBGROUP 5.0");
         sb.AppendLine($"StartupProject={clientVbpRelativeFromVbg}");
         sb.AppendLine($"Project={clientVbpRelativeFromVbg}");
         if (!string.IsNullOrWhiteSpace(hostVbpAbsolutePath) && File.Exists(hostVbpAbsolutePath))
-            sb.AppendLine($"Project={hostVbpAbsolutePath}");
+            sb.AppendLine($"Project={MakeRelativeIfPossible(outputDir, hostVbpAbsolutePath)}");
         return sb.ToString();
     }
 
-    private static List<string> TryCollectChilkat11References(string? mainVbpPath)
+    private const string Chilkat11TypelibGuid = "{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}";
+
+    private static List<string> TryCollectChilkat11References(string? mainVbpPath, string outputDir)
     {
         var result = new List<string>();
         if (string.IsNullOrWhiteSpace(mainVbpPath) || !File.Exists(mainVbpPath))
             return result;
-        const string chilkat11TypelibGuid = "{06FB4061-5E43-42E0-8A6E-4A1C869E59AF}";
+        var mainVbpDir = Path.GetDirectoryName(Path.GetFullPath(mainVbpPath));
         foreach (var line in File.ReadAllLines(mainVbpPath))
         {
             if (!line.StartsWith("Reference=", StringComparison.OrdinalIgnoreCase) &&
                 !line.StartsWith("Object=", StringComparison.OrdinalIgnoreCase))
                 continue;
             if (!line.Contains("Chilkat", StringComparison.OrdinalIgnoreCase)) continue;
-            if (line.Contains(chilkat11TypelibGuid, StringComparison.OrdinalIgnoreCase))
-                result.Add(line);
+            if (!line.Contains(Chilkat11TypelibGuid, StringComparison.OrdinalIgnoreCase)) continue;
+            // Reference line in main vbp may have a path relative to main vbp's folder.
+            // Re-anchor it to outputDir so it remains valid when written to the generated vbp.
+            result.Add(RebaseVbpReferenceLine(line, mainVbpDir, outputDir));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Builds a synthetic Chilkat 11 Reference= line, looking up the typelib's
+    /// registered file path and making it relative to <paramref name="outputDir"/>.
+    /// Falls back to the absolute path if not registered.
+    /// </summary>
+    private static string BuildChilkat11ReferenceFromRegistry(string outputDir)
+    {
+        var registeredPath = Vb6Bootstrap.LookupTypelibPath(Chilkat11TypelibGuid, "1.0");
+        var path = registeredPath is not null
+            ? MakeRelativeIfPossible(outputDir, registeredPath)
+            : @"..\..\..\Program Files (x86)\Chilkat Software, Inc\Chilkat 32-bit ActiveX\ChilkatAx-win32.dll";
+        return $@"Reference=*\G{Chilkat11TypelibGuid}#1.0#0#{path}#Chilkat ActiveX v11.0.0";
+    }
+
+    /// <summary>
+    /// VB6 Reference= lines have a path token (the 4th field, after the #-separated
+    /// GUID/version/lcid) that may be absolute or relative. If relative, it's
+    /// resolved against the .vbp's folder. When copying a Reference= line from one
+    /// vbp into another that lives in a different folder, the path token must be
+    /// re-anchored or the new vbp won't find the DLL.
+    /// </summary>
+    private static string RebaseVbpReferenceLine(string line, string? oldVbpDir, string newVbpDir)
+    {
+        if (oldVbpDir is null) return line;
+        // Format: Reference=*\G{guid}#major.minor#lcid#PATH#description
+        var prefix = "Reference=";
+        if (!line.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)) return line;
+        var body = line[prefix.Length..];
+        var parts = body.Split('#');
+        if (parts.Length < 5) return line;
+        var pathToken = parts[3];
+        var absolute = Path.IsPathRooted(pathToken)
+            ? pathToken
+            : Path.GetFullPath(Path.Combine(oldVbpDir, pathToken));
+        parts[3] = MakeRelativeIfPossible(newVbpDir, absolute);
+        return prefix + string.Join('#', parts);
+    }
+
+    private static string MakeRelativeIfPossible(string anchorDir, string targetPath)
+    {
+        if (string.IsNullOrEmpty(anchorDir) || string.IsNullOrEmpty(targetPath))
+            return targetPath;
+        try
+        {
+            var rel = Path.GetRelativePath(Path.GetFullPath(anchorDir), Path.GetFullPath(targetPath));
+            // If GetRelativePath couldn't bridge (e.g. different drive letters) it
+            // returns the absolute path unchanged.
+            return rel;
+        }
+        catch
+        {
+            return targetPath;
+        }
     }
 }

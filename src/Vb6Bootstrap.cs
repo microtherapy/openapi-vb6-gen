@@ -1,9 +1,53 @@
 using System.Diagnostics;
+using System.Text;
 
 namespace OpenApiVb6Gen;
 
 internal static class Vb6Bootstrap
 {
+    /// <summary>
+    /// Looks up the file path registered for a TypeLib in HKCR. Returns null if the
+    /// typelib is not registered. Uses reg.exe to stay net10.0 cross-platform —
+    /// the generator only runs on Windows, but this avoids pulling in the
+    /// Microsoft.Win32.Registry dependency.
+    /// </summary>
+    public static string? LookupTypelibPath(string libId, string version = "1.0")
+    {
+        var key = $@"HKCR\TypeLib\{libId}\{version}\0\win32";
+        var psi = new ProcessStartInfo("reg.exe")
+        {
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
+        psi.ArgumentList.Add("query");
+        psi.ArgumentList.Add(key);
+        psi.ArgumentList.Add("/ve");
+        using var p = Process.Start(psi);
+        if (p is null) return null;
+        var sb = new StringBuilder();
+        p.OutputDataReceived += (_, e) => { if (e.Data != null) sb.AppendLine(e.Data); };
+        p.BeginOutputReadLine();
+        if (!p.WaitForExit(5_000))
+        {
+            try { p.Kill(true); } catch { }
+            return null;
+        }
+        if (p.ExitCode != 0) return null;
+        // reg query output:
+        //   HKEY_CLASSES_ROOT\TypeLib\{...}\1.0\0\win32
+        //       (Default)    REG_SZ    C:\path\to\foo.dll
+        foreach (var line in sb.ToString().Split('\n'))
+        {
+            var idx = line.IndexOf("REG_SZ", StringComparison.Ordinal);
+            if (idx < 0) continue;
+            var path = line[(idx + "REG_SZ".Length)..].Trim();
+            if (path.Length > 0) return path;
+        }
+        return null;
+    }
+
     public static string FindVb6Exe(string? explicitPath)
     {
         if (!string.IsNullOrWhiteSpace(explicitPath))

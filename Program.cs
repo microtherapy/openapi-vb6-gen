@@ -432,6 +432,7 @@ internal static class App
         var baseInputs = new VbpEmitterInputs
         {
             ProjectName = opts.ProjectName,
+            OutputDir = opts.Output,
             ClassFiles = classFiles,
             ModuleFiles = moduleFiles,
             MainVbpPath = opts.MainVbp,
@@ -448,7 +449,7 @@ internal static class App
 
         var clientVbpRel = opts.ProjectName + ".vbp";
         File.WriteAllText(Path.Combine(opts.Output, opts.ProjectName + ".vbg"),
-            vbpEmitter.EmitVbg(opts.ProjectName, opts.MainVbp, clientVbpRel));
+            vbpEmitter.EmitVbg(opts.ProjectName, opts.MainVbp, clientVbpRel, opts.Output));
     }
 
     private static void BuildCompatDll(Options opts, VbpEmitterInputs baseInputs, VbpEmitter vbpEmitter,
